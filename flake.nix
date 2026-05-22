@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -17,6 +18,7 @@
   outputs =
     {
       self,
+      crane,
       nixpkgs,
       flake-utils,
       rust-overlay,
@@ -35,7 +37,8 @@
             overlays = [ rust-overlay.overlays.default ];
           };
 
-          rustToolchain = pkgs.rust-bin.stable."1.95.0".default.override {
+          rustVersion = "1.95.0";
+          rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
             extensions = [
               "rust-src"
               "rust-analyzer"
@@ -44,6 +47,20 @@
             ];
           };
 
+          craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+          src = craneLib.cleanCargoSource ./.;
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+          };
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          egressd = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              doCheck = false;
+            }
+          );
           treefmt = treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "flake.nix";
 
@@ -57,7 +74,20 @@
 
           formatter = treefmt.config.build.wrapper;
 
-          checks.formatting = treefmt.config.build.check self;
+          packages.default = egressd;
+
+          checks = {
+            build = egressd;
+            clippy = craneLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+              }
+            );
+            format = craneLib.cargoFmt { inherit src; };
+            nix-fmt = treefmt.config.build.check self;
+          };
         }
       );
 }
